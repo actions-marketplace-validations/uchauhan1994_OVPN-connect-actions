@@ -157,17 +157,3 @@ See [example.ovpn](./example.ovpn) for a basic configuration layout.
   code.
 - Keep the cleanup step under `if: always()` so credential files are removed
   even when a later step fails.
-
-## Development
-
-Node.js 24 is required.
-
-```bash
-yarn install
-yarn lint:check
-yarn prettier:check
-yarn build
-```
-
-Commit the regenerated `dist/index.js` whenever `index.js` or a runtime
-dependency changes.

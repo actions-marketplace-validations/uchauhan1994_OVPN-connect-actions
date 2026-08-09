@@ -33256,91 +33256,152 @@ var __webpack_exports__ = {};
 const fs = __nccwpck_require__(3024)
 const path = __nccwpck_require__(6760)
 const {spawnSync} = __nccwpck_require__(1421)
-const ping = __nccwpck_require__(4760)
-// GITHUB
 const core = __nccwpck_require__(7484)
+const ping = __nccwpck_require__(4760)
 
-try {
-  // Get input defined in action metadata file
-  const pingURL = core.getInput('PING_URL').trim()
-    ? core.getInput('PING_URL').trim()
-    : '127.0.0.1'
-  const fileOVPN = core.getInput('FILE_OVPN').trim()
-    ? core.getInput('FILE_OVPN').trim()
-    : './.github/vpn/config.ovpn'
-  const secret = core.getInput('SECRET').trim()
-    ? core.getInput('SECRET').trim()
-    : process.env.SECRET_USERNAME_PASSWORD.trim()
-  const tlsKey = core.getInput('TLS_KEY').trim()
-    ? core.getInput('TLS_KEY').trim()
-    : process.env.TLS_KEY.trim()
+const credentialFiles = {
+  CA_CRT: 'ca.crt',
+  USER_CRT: 'user.crt',
+  USER_KEY: 'user.key',
+}
 
-  if (process.env.CA_CRT == null) {
-    core.setFailed(`Can't get ca cert please add CA_CRT in secret`)
-    process.exit(1)
+function readEnvironment(name, required = false) {
+  const value = (process.env[name] || '').trim()
+
+  if (required && !value) {
+    throw new Error(`Environment variable ${name} is required`)
   }
 
-  if (process.env.USER_CRT == null) {
-    core.setFailed(`Can't get user cert please add USER_CRT in secret`)
-    process.exit(1)
+  if (value) {
+    core.setSecret(value)
   }
 
-  if (process.env.USER_KEY == null) {
-    core.setFailed(`Can't get user key please add USER_KEY in secret`)
-    process.exit(1)
+  return value
+}
+
+function readInputOrEnvironment(inputName, environmentName) {
+  const input = core.getInput(inputName).trim()
+  const value = input || readEnvironment(environmentName)
+
+  if (value) {
+    core.setSecret(value)
   }
 
-  const finalPath = path.resolve(process.cwd(), fileOVPN)
+  return value
+}
 
-  const createFile = (filename, data) => {
-    try {
-      fs.writeFileSync(filename, Buffer.from(data, 'base64'), {mode: 0o600})
-      fs.chmodSync(filename, 0o600)
-    } catch {
-      core.setFailed(`Can't create file ${filename}`)
-      process.exit(1)
-    }
+function decodeCredential(value, name) {
+  const encoded = value.replace(/\s/g, '')
+  const isBase64 =
+    encoded.length > 0 &&
+    encoded.length % 4 === 0 &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      encoded,
+    )
+
+  if (!isBase64) {
+    throw new Error(`${name} must contain valid Base64 data`)
   }
 
-  if (secret !== '') {
-    createFile('secret.txt', secret)
-  }
-  if (tlsKey !== '') {
-    createFile('tls.key', tlsKey)
+  return Buffer.from(encoded, 'base64')
+}
+
+function writeCredential(filename, value, name) {
+  const destination = path.resolve(process.cwd(), filename)
+
+  if (
+    fs.existsSync(destination) &&
+    fs.lstatSync(destination).isSymbolicLink()
+  ) {
+    throw new Error(`Refusing to overwrite symbolic link: ${filename}`)
   }
 
-  createFile('ca.crt', process.env.CA_CRT.trim())
-  createFile('user.crt', process.env.USER_CRT.trim())
-  createFile('user.key', process.env.USER_KEY.trim())
+  fs.writeFileSync(destination, decodeCredential(value, name), {
+    flag: 'w',
+    mode: 0o600,
+  })
+  fs.chmodSync(destination, 0o600)
+}
 
-  const openvpn = spawnSync(
+function resolveConfiguration(filename) {
+  const resolved = path.resolve(process.cwd(), filename)
+
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    throw new Error(`OpenVPN configuration not found: ${filename}`)
+  }
+
+  return resolved
+}
+
+function startOpenVpn(configuration) {
+  const result = spawnSync(
     'sudo',
-    ['openvpn', '--config', finalPath, '--daemon'],
+    ['openvpn', '--config', configuration, '--daemon'],
     {stdio: 'inherit'},
   )
 
-  if (openvpn.status !== 0) {
-    core.setFailed(`Can't setup config ${finalPath}`)
-    process.exit(1)
+  if (result.error) {
+    throw result.error
   }
 
-  ping.promise
-    .probe(pingURL, {
-      timeout: 15,
-      min_reply: 15,
-    })
-    .then(function (res) {
-      if (res.alive) {
-        core.info('Connect vpn passed')
-        core.setOutput('STATUS', true)
-      } else {
-        core.setFailed('Connect vpn failed')
-        core.setOutput('STATUS', false)
-      }
-    })
-} catch (error) {
-  core.setFailed(error.message)
+  if (result.status !== 0) {
+    throw new Error(`OpenVPN exited with status ${result.status}`)
+  }
 }
+
+function validatePingTarget(target) {
+  if (!target || target.startsWith('-') || /\s/.test(target)) {
+    throw new Error(`Invalid ping target: ${target}`)
+  }
+
+  return target
+}
+
+async function run() {
+  const configuration = resolveConfiguration(
+    core.getInput('FILE_OVPN').trim() || './config.ovpn',
+  )
+  const pingTarget = validatePingTarget(
+    core.getInput('PING_URL').trim() || '127.0.0.1',
+  )
+  const usernamePassword = readInputOrEnvironment(
+    'SECRET',
+    'SECRET_USERNAME_PASSWORD',
+  )
+  const tlsKey = readInputOrEnvironment('TLS_KEY', 'TLS_KEY')
+
+  for (const [name, filename] of Object.entries(credentialFiles)) {
+    writeCredential(filename, readEnvironment(name, true), name)
+  }
+
+  if (usernamePassword) {
+    writeCredential('secret.txt', usernamePassword, 'SECRET')
+  }
+
+  if (tlsKey) {
+    writeCredential('tls.key', tlsKey, 'TLS_KEY')
+  }
+
+  startOpenVpn(configuration)
+
+  const response = await ping.promise.probe(pingTarget, {
+    timeout: 15,
+    min_reply: 15,
+  })
+
+  core.setOutput('STATUS', response.alive)
+
+  if (!response.alive) {
+    throw new Error(`VPN verification failed for ${pingTarget}`)
+  }
+
+  core.info(`VPN connection verified through ${pingTarget}`)
+}
+
+run().catch((error) => {
+  core.setOutput('STATUS', false)
+  core.setFailed(error instanceof Error ? error.message : String(error))
+})
 
 module.exports = __webpack_exports__;
 /******/ })()
