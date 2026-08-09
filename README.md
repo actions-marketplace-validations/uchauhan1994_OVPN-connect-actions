@@ -1,96 +1,173 @@
-<div align="center"><h1>:no_entry: THIS REPO IS DEPRECATED :no_entry:</h1></div>
+# OVPN Connect Action
 
-<div align="center"><h1>Actions Connect Open VPN</h1></div>
+Connect a GitHub Actions job to an OpenVPN network and confirm that a host is
+reachable through the tunnel.
 
-This action is a connect ovpn script
+The action decodes VPN credentials from GitHub Secrets, starts OpenVPN in the
+background, and exposes a status output after testing the configured address. It
+runs on Node.js 24.
 
-## Example file `.ovpn` to connect vpn
+## Requirements
 
-[Example.ovpn](./example.ovpn) and [setup file](#Example-prepare-file-.ovpn)
+- A Linux GitHub Actions runner
+- OpenVPN installed on the runner
+- An `.ovpn` client configuration stored in the repository
+- The required certificates and private key stored as GitHub Secrets
 
-## Configuration with With
+## Inputs
 
-The following settings must be passed as environment variables as shown in the
-example.
+| Input       | Description                                      | Required | Default         |
+| ----------- | ------------------------------------------------ | -------- | --------------- |
+| `FILE_OVPN` | Path to the OpenVPN client configuration         | Yes      | `./config.ovpn` |
+| `PING_URL`  | Host or IP address used to verify the connection | Yes      | `127.0.0.1`     |
+| `SECRET`    | Base64-encoded username/password file            | No       | Empty           |
+| `TLS_KEY`   | Base64-encoded TLS crypt key                     | No       | Empty           |
 
-| Key         | Value                                                                                                                           | Suggested Type | Required | Default         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------- | -------- | --------------- |
-| `FILE_OVPN` | Location file open vpn and .                                                                                                    | `env`          | **Yes**  | `./config.ovpn` |
-| `PING_URL`  | URL for check status vpn connect pass or fail                                                                                   | `env`          | **Yes**  | `127.0.0.1`     |
-| `SECRET`    | Username password for access vpn`(Encode base 64 before set secret.)`[How to encode base 64 ?](https://www.base64encode.org/).  | `secret env`   | No       | `''`            |
-| `TLS_KEY`   | Tls-crypt for access vpn `(Encode base 64 before set secret.)`[How to encode base 64 ?](https://www.base64encode.org/).         | `secret env`   | No       | `''`            |
+## Required environment variables
 
-## Configuration with Env
+| Variable   | Description                                      |
+| ---------- | ------------------------------------------------ |
+| `CA_CRT`   | Base64-encoded certificate-authority certificate |
+| `USER_CRT` | Base64-encoded client certificate                |
+| `USER_KEY` | Base64-encoded client private key                |
 
-The following settings must be passed as environment variables as shown in the
-example.
+When inputs `SECRET` or `TLS_KEY` are not provided, the action can read their
+values from `SECRET_USERNAME_PASSWORD` and `TLS_KEY` environment variables.
 
-| Key         | Value                                                                                                                           | Suggested Type | Required | Default |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------- | -------- | ------- |
-| `CA_CRT`    | Certificate for access vpn `(Encode base 64 before set secret.)`[How to encode base 64 ?](https://www.base64encode.org/).       | `secret env`   | **Yes**  | N/A     |
-| `USER_CRT`  | User certificate for access vpn. `(Encode base 64 before set secret.)`[How to encode base 64 ?](https://www.base64encode.org/). | `secret env`   | **Yes**  | N/A     |
-| `USER_KEY`  | User key for access vpn. `(Encode base 64 before set secret.)`[How to encode base 64 ?](https://www.base64encode.org/).         | `secret env`   | **Yes**  | N/A     |
+## Output
 
-## Outputs
+| Output   | Description                                                   |
+| -------- | ------------------------------------------------------------- |
+| `STATUS` | `true` when the verification host responds; otherwise `false` |
 
-### `STATUS`
+## Example workflow
 
-**Boolean** Can get status after connect `true` or `false`.
+```yaml
+name: VPN connection test
 
-## Example usage
+on:
+  workflow_dispatch:
 
-```yml
-  connect-open-vpn:
+permissions:
+  contents: read
+
+jobs:
+  connect-vpn:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v1
-      - name: Install Open VPN
-        run: sudo apt-get install openvpn
-      - name: Connect VPN
-        uses: golfzaptw/action-connect-ovpn@master
-        id: connect_vpn
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install OpenVPN
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes openvpn
+
+      - name: Connect to VPN
+        id: vpn
+        uses: uchauhan1994/OVPN-connect-actions@main
         with:
-          PING_URL: '127.0.0.1'
-          FILE_OVPN: '.github/vpn/config.ovpn'
+          FILE_OVPN: .github/vpn/config.ovpn
+          PING_URL: 10.0.0.10
           SECRET: ${{ secrets.SECRET_USERNAME_PASSWORD }}
           TLS_KEY: ${{ secrets.TLS_KEY }}
         env:
-          CA_CRT: ${{ secrets.CA_CRT}}
+          CA_CRT: ${{ secrets.CA_CRT }}
           USER_CRT: ${{ secrets.USER_CRT }}
           USER_KEY: ${{ secrets.USER_KEY }}
-      - name: Check Connect VPN
-        run: echo ${{ steps.connect_vpn.outputs.STATUS }}
-      - name: kill vpn
+
+      - name: Display connection status
+        run: echo "VPN connected: ${{ steps.vpn.outputs.STATUS }}"
+
+      - name: Disconnect and remove credentials
         if: always()
-        run: sudo killall openvpn
+        run: |
+          sudo pkill openvpn || true
+          rm -f ca.crt user.crt user.key tls.key secret.txt
 ```
 
-## How to prepare file .ovpn
+For production workflows, reference a released version or full commit SHA
+instead of the moving `main` branch.
 
-### Step
+## Prepare the OpenVPN configuration
 
-1. Copy the data inside the tags
-`<ca></ca>`
-`<cert></cert>`
-`<key></key>`
-and encode those values to base64. Then save those values (without a new line!) to the secrets in github actions
+Remove embedded credentials from the `.ovpn` file and reference the files that
+the action creates:
 
-2. In the .ovpn file in your repo, remove the tags
-`<ca></ca>`
-`<cert></cert>`
-`<key></key> `
-and replace the values with
-```
+```text
 ca ca.crt
 cert user.crt
 key user.key
 ```
 
-This will allow the values to be filled in from Github secrets.
+If the VPN requires username/password authentication or a TLS crypt key, add:
 
-3. If your open vpn configuration has a username and password please encode those in base64. After that, save the values in the github actions secrets.
-format username password
-username-vpn
-password-vpn
+```text
+auth-user-pass secret.txt
+tls-crypt tls.key
+```
 
-4. If open vpn have tag `<tls></tls>` please repeat step 1 and 2 for the TLS records.
+Only keep the lines required by your VPN provider.
+
+## Create the secrets
+
+Encode each credential locally. Do not paste private keys or passwords into an
+online encoding service. Base64 is an encoding format, not encryption.
+
+Linux:
+
+```bash
+base64 -w 0 ca.crt
+base64 -w 0 user.crt
+base64 -w 0 user.key
+base64 -w 0 tls.key
+base64 -w 0 secret.txt
+```
+
+macOS:
+
+```bash
+base64 -i ca.crt
+base64 -i user.crt
+base64 -i user.key
+base64 -i tls.key
+base64 -i secret.txt
+```
+
+Add the resulting values under **Repository settings > Secrets and variables >
+Actions** using the names shown above.
+
+The optional `secret.txt` file normally contains the VPN username and password
+on separate lines:
+
+```text
+vpn-username
+vpn-password
+```
+
+See [example.ovpn](./example.ovpn) for a basic configuration layout.
+
+## Security guidance
+
+- Run the action only with a trusted `.ovpn` configuration.
+- Store credentials in GitHub Secrets, never directly in workflow YAML.
+- Grant the workflow only the permissions it needs.
+- Do not expose VPN secrets to workflows that execute untrusted pull-request
+  code.
+- Keep the cleanup step under `if: always()` so credential files are removed
+  even when a later step fails.
+
+## Development
+
+Node.js 24 is required.
+
+```bash
+yarn install
+yarn lint:check
+yarn prettier:check
+yarn build
+```
+
+Commit the regenerated `dist/index.js` whenever `index.js` or a runtime
+dependency changes.
