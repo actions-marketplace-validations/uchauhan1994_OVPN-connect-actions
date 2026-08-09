@@ -1,7 +1,7 @@
-name: 'Connect-VPN'
-description: 'Connect VPN'
+name: 'OVPN Connect and Verify'
+description: 'Connect a GitHub Actions job to OpenVPN and verify network access'
 branding:
-  icon: 'cast'
+  icon: 'wifi'
   color: 'green'
 inputs:
   SECRET:
