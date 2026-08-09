@@ -1,8 +1,9 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const {spawnSync} = require('node:child_process')
-const core = require('@actions/core')
 const ping = require('ping')
+
+let core
 
 const credentialFiles = {
   CA_CRT: 'ca.crt',
@@ -103,6 +104,8 @@ function validatePingTarget(target) {
 }
 
 async function run() {
+  core = await import(/* webpackMode: 'eager' */ '@actions/core')
+
   const configuration = resolveConfiguration(
     core.getInput('FILE_OVPN').trim() || './config.ovpn',
   )
@@ -144,6 +147,13 @@ async function run() {
 }
 
 run().catch((error) => {
-  core.setOutput('STATUS', false)
-  core.setFailed(error instanceof Error ? error.message : String(error))
+  const message = error instanceof Error ? error.message : String(error)
+
+  if (core) {
+    core.setOutput('STATUS', false)
+    core.setFailed(message)
+  } else {
+    console.error(message)
+    process.exitCode = 1
+  }
 })
